@@ -1,11 +1,436 @@
+
 <!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>Repository E</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Trader Pro - 사체 시스템 업데이트</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --bg: #121212;
+            --panel: #1e1e1e;
+            --border: #333;
+            --up: #ef4444; 
+            --down: #3b82f6;
+        }
+        body { background-color: var(--bg); color: #e0e0e0; font-family: 'Inter', sans-serif; height: 100vh; overflow: hidden; }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+        ::-webkit-scrollbar-track { background: #1a1a1a; }
+
+        .panel { background-color: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+        .text-up { color: var(--up); }
+        .text-down { color: var(--down); }
+        
+        canvas { width: 100%; height: 100%; }
+        
+        .btn { transition: 0.2s; }
+        .btn:active { transform: scale(0.95); }
+
+        /* 흔들림 애니메이션 */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-8px); }
+            50% { transform: translateX(8px); }
+            75% { transform: translateX(-8px); }
+        }
+        .shake-error {
+            animation: shake 0.3s ease-in-out;
+            color: #ff4444 !important;
+        }
+
+        /* 모달 스타일 */
+        #loanModal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            width: 350px;
+        }
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            z-index: 90;
+        }
+    </style>
 </head>
-<body>
-    <h1>저장소 e에 오신 것을 환영합니다!</h1>
-    <p>성공적으로 생성된 HTML 파일입니다.</p>
+<body class="flex flex-col h-full">
+
+    <!-- 사체 모달 -->
+    <div id="modalOverlay" class="modal-overlay" onclick="closeLoanModal()"></div>
+    <div id="loanModal" class="panel p-6 shadow-2xl border-red-900 border-2">
+        <h2 class="text-xl font-bold text-red-500 mb-4 text-center">💸 지하경제 사체 대출</h2>
+        <div class="space-y-4">
+            <div class="flex justify-between text-sm">
+                <span>현재 대출금</span>
+                <span id="currentLoanText" class="text-red-400 font-bold">0 ₩</span>
+            </div>
+            <div class="flex justify-between text-sm">
+                <span>대출 가능 한도</span>
+                <span id="loanLimitText" class="text-gray-400">100,000,000 ₩</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <button onclick="borrowMoney(1000000)" class="bg-gray-800 hover:bg-gray-700 py-2 rounded text-xs">+100만</button>
+                <button onclick="borrowMoney(10000000)" class="bg-gray-800 hover:bg-gray-700 py-2 rounded text-xs">+1,000만</button>
+            </div>
+            <button onclick="borrowMoney(100000000)" class="w-full bg-red-900 hover:bg-red-800 py-3 rounded font-bold text-sm">최대 대출 (1억)</button>
+            
+            <div class="border-t border-gray-700 my-4"></div>
+            
+            <button onclick="repayMoney()" class="w-full bg-blue-900 hover:bg-blue-800 py-3 rounded font-bold text-sm">전액 상환하기</button>
+            <button onclick="closeLoanModal()" class="w-full py-2 text-gray-500 text-xs">닫기</button>
+        </div>
+    </div>
+
+    <!-- 헤더 -->
+    <header class="h-14 bg-[#1a1a1a] border-b border-[#333] flex items-center justify-between px-6 shrink-0">
+        <div class="flex items-center gap-2">
+            <span class="text-2xl">📈</span>
+            <h1 class="font-bold text-lg">Stock Trader <span class="text-xs text-red-500 font-normal">Loan System</span></h1>
+        </div>
+        <div class="flex items-center gap-6">
+            <div class="text-right">
+                <div class="text-xs text-gray-400">순 자산 (현금+주식-빚)</div>
+                <div id="totalAsset" class="font-bold text-xl text-yellow-400">0 ₩</div>
+            </div>
+            <button onclick="resetData()" class="text-xs text-gray-600 hover:text-red-400 border border-gray-700 px-3 py-1 rounded">초기화</button>
+        </div>
+    </header>
+
+    <div class="flex-1 flex overflow-hidden p-4 gap-4">
+        <!-- 1. 좌측: 종목 리스트 -->
+        <aside class="w-1/4 panel flex flex-col min-w-[250px]">
+            <div class="p-3 border-b border-[#333] font-bold text-sm text-gray-400 flex justify-between">
+                <span>종목명</span>
+                <span>현재가</span>
+            </div>
+            <div id="stockList" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+        </aside>
+
+        <!-- 2. 중앙: 차트 및 매매 -->
+        <main class="flex-1 flex flex-col gap-4 min-w-[400px]">
+            <div class="flex-1 panel relative flex flex-col">
+                <div class="p-3 border-b border-[#333] flex justify-between items-center bg-[#252525] rounded-t-lg">
+                    <div id="selectedStockName" class="font-bold text-lg">종목을 선택하세요</div>
+                    <div id="selectedStockPrice" class="font-mono text-xl font-bold">--</div>
+                </div>
+                <div class="flex-1 relative p-4">
+                    <canvas id="chartCanvas"></canvas>
+                </div>
+            </div>
+
+            <div class="h-48 panel p-6 flex gap-8 items-center justify-center bg-[#1a1a1a]">
+                <div id="cashPanel" class="flex flex-col gap-2 w-1/3 transition-all duration-300">
+                    <div class="flex justify-between text-sm text-gray-400">
+                        <span>보유 현금</span>
+                        <span id="myCash" class="text-white font-bold">0 ₩</span>
+                    </div>
+                    <div class="flex justify-between text-sm text-gray-400">
+                        <span>보유 수량</span>
+                        <span id="myHoldings" class="text-white">0 주</span>
+                    </div>
+                    <div class="flex justify-between text-sm text-gray-400">
+                        <span>평단가</span>
+                        <span id="myAvgPrice" class="text-white">0 ₩</span>
+                    </div>
+                </div>
+
+                <div class="w-[1px] h-full bg-[#333]"></div>
+
+                <div class="flex-1 flex flex-col gap-4">
+                    <div class="flex gap-2">
+                        <button onclick="setQty(10)" class="flex-1 bg-[#333] hover:bg-[#444] py-1 rounded text-xs text-gray-300">10주</button>
+                        <button onclick="setQty(50)" class="flex-1 bg-[#333] hover:bg-[#444] py-1 rounded text-xs text-gray-300">50주</button>
+                        <button onclick="setMaxQty()" class="flex-1 bg-[#333] hover:bg-[#444] py-1 rounded text-xs text-gray-300">최대</button>
+                    </div>
+                    <div class="flex gap-4 items-center">
+                        <input type="number" id="tradeQty" value="1" min="1" class="bg-[#121212] border border-[#333] rounded p-3 text-right text-white w-full font-bold text-lg" placeholder="수량">
+                        <div class="flex flex-col gap-2 w-full">
+                            <button id="buyBtn" class="bg-red-600 hover:bg-red-500 text-white py-3 rounded font-bold btn">매수 (Buy)</button>
+                            <button id="sellBtn" class="bg-blue-600 hover:bg-blue-500 text-white py-3 rounded font-bold btn">매도 (Sell)</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 3. 우측: 포트폴리오 및 사체 -->
+        <aside class="w-1/4 flex flex-col gap-4 min-w-[250px]">
+            <button onclick="openLoanModal()" class="w-full bg-red-900/40 hover:bg-red-900/60 border border-red-700 p-3 rounded text-red-200 font-bold flex justify-between items-center">
+                <span>💰 사체 대출 관리</span>
+                <span id="loanBadge" class="text-xs bg-red-600 text-white px-2 py-0.5 rounded-full">빚: 0</span>
+            </button>
+            <div class="flex-1 panel flex flex-col overflow-hidden">
+                <div class="p-3 border-b border-[#333] font-bold text-sm text-gray-400">보유 종목 현황</div>
+                <div id="portfolioList" class="flex-1 overflow-y-auto p-2 space-y-1"></div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const DEFAULT_CASH = 10000000;
+        const MAX_LOAN_LIMIT = 100000000;
+        const DEFAULT_STOCKS = [
+            { id: 'sec', name: '삼성전자', price: 72000, volatility: 0.012 },
+            { id: 'sk', name: 'SK하이닉스', price: 140000, volatility: 0.025 },
+            { id: 'eco', name: '에코프로', price: 600000, volatility: 0.04 },
+            { id: 'posco', name: '포스코홀딩스', price: 450000, volatility: 0.022 },
+            { id: 'naver', name: '네이버', price: 210000, volatility: 0.018 },
+            { id: 'tesla', name: '국산테슬라', price: 30000, volatility: 0.05 }
+        ];
+
+        let user = { cash: DEFAULT_CASH, holdings: {}, loan: 0 };
+        let stocks = [];
+        let selectedStockId = 'sec';
+
+        function init() {
+            loadData();
+            renderStockList();
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            setInterval(() => {
+                updateMarket();
+                // 5초마다 대출 이자 발생 (0.5%)
+                if(user.loan > 0) {
+                    user.loan = Math.floor(user.loan * 1.005);
+                    updateLoanUI();
+                }
+                saveData();
+            }, 1000);
+
+            drawChart();
+            updateUI();
+        }
+
+        // 데이터 저장/로드
+        function saveData() {
+            const data = { user, stocks: stocks.map(s => ({ id: s.id, price: s.price, history: s.history.slice(-50) })) };
+            localStorage.setItem('stockSimData_v2', JSON.stringify(data));
+        }
+
+        function loadData() {
+            const saved = localStorage.getItem('stockSimData_v2');
+            if (saved) {
+                const data = JSON.parse(saved);
+                user = data.user;
+                if (!user.loan) user.loan = 0; // 하위호환
+                stocks = DEFAULT_STOCKS.map(def => {
+                    const savedS = data.stocks.find(s => s.id === def.id);
+                    return { ...def, price: savedS?savedS.price:def.price, history: savedS?savedS.history:Array(50).fill(def.price), change:0 };
+                });
+            } else {
+                stocks = DEFAULT_STOCKS.map(s => ({ ...s, history: Array(50).fill(s.price), change: 0 }));
+            }
+        }
+
+        // 대출 관련 기능
+        function openLoanModal() {
+            document.getElementById('loanModal').style.display = 'block';
+            document.getElementById('modalOverlay').style.display = 'block';
+            updateLoanUI();
+        }
+        function closeLoanModal() {
+            document.getElementById('loanModal').style.display = 'none';
+            document.getElementById('modalOverlay').style.display = 'none';
+        }
+        function updateLoanUI() {
+            document.getElementById('currentLoanText').innerText = user.loan.toLocaleString() + " ₩";
+            document.getElementById('loanBadge').innerText = "빚: " + Math.floor(user.loan/10000) + "만";
+            document.getElementById('loanLimitText').innerText = (MAX_LOAN_LIMIT - user.loan).toLocaleString() + " ₩";
+        }
+        function borrowMoney(amt) {
+            if (user.loan + amt > MAX_LOAN_LIMIT) return alert("사체업자: " + (MAX_LOAN_LIMIT/100000000) + "억 이상은 안 빌려주네.");
+            user.loan += amt;
+            user.cash += amt;
+            updateUI();
+            updateLoanUI();
+            saveData();
+        }
+        function repayMoney() {
+            if (user.cash < user.loan) return alert("사체업자: 돈이 모자라는데 장난하나?");
+            user.cash -= user.loan;
+            user.loan = 0;
+            updateUI();
+            updateLoanUI();
+            saveData();
+        }
+
+        // 돈 부족 애니메이션
+        function triggerNoMoneyEffect() {
+            const el = document.getElementById('cashPanel');
+            el.classList.add('shake-error');
+            setTimeout(() => el.classList.remove('shake-error'), 400);
+        }
+
+        // 시장 로직
+        function updateMarket() {
+            stocks.forEach(stock => {
+                const changeP = (Math.random() - 0.5) * 2 * stock.volatility;
+                const prev = stock.price;
+                stock.price = Math.max(100, Math.floor(stock.price * (1 + changeP)));
+                stock.change = ((stock.price - prev) / prev) * 100;
+                stock.history.push(stock.price);
+                if (stock.history.length > 50) stock.history.shift();
+            });
+            updateStockPricesUI();
+            drawChart();
+            updateTotalAsset();
+            renderPortfolio();
+        }
+
+        // UI 갱신
+        function updateStockPricesUI() {
+            stocks.forEach(stock => {
+                const el = document.getElementById(`stock-item-${stock.id}`);
+                if (el) {
+                    const pEl = el.querySelector('.price-val');
+                    const cEl = el.querySelector('.change-val');
+                    pEl.innerText = stock.price.toLocaleString();
+                    cEl.innerText = (stock.change > 0 ? '+' : '') + stock.change.toFixed(2) + '%';
+                    pEl.className = `font-mono font-bold text-sm price-val ${stock.change >= 0 ? 'text-up' : 'text-down'}`;
+                    cEl.className = `text-xs change-val ${stock.change >= 0 ? 'text-up' : 'text-down'}`;
+                }
+            });
+            updateUI();
+        }
+
+        function updateUI() {
+            const stock = stocks.find(s => s.id === selectedStockId);
+            document.getElementById('selectedStockName').innerText = stock.name;
+            const pEl = document.getElementById('selectedStockPrice');
+            pEl.innerText = stock.price.toLocaleString() + " ₩";
+            pEl.className = `font-mono text-xl font-bold ${stock.change >= 0 ? 'text-up' : 'text-down'}`;
+            document.getElementById('myCash').innerText = Math.floor(user.cash).toLocaleString() + " ₩";
+            const h = user.holdings[stock.id];
+            document.getElementById('myHoldings').innerText = (h ? h.qty : 0) + " 주";
+            document.getElementById('myAvgPrice').innerText = (h ? Math.floor(h.avg).toLocaleString() : 0) + " ₩";
+        }
+
+        function updateTotalAsset() {
+            let sVal = 0;
+            Object.keys(user.holdings).forEach(id => {
+                const s = stocks.find(st => st.id === id);
+                if(s) sVal += s.price * user.holdings[id].qty;
+            });
+            const total = user.cash + sVal - user.loan;
+            document.getElementById('totalAsset').innerText = Math.floor(total).toLocaleString() + " ₩";
+        }
+
+        // 매매 로직
+        document.getElementById('buyBtn').onclick = () => {
+            const qty = parseInt(document.getElementById('tradeQty').value);
+            const stock = stocks.find(s => s.id === selectedStockId);
+            const cost = stock.price * qty;
+
+            if (qty <= 0 || isNaN(qty)) return;
+            if (user.cash < cost) {
+                triggerNoMoneyEffect(); // 돈 부족시 애니메이션
+                return;
+            }
+
+            user.cash -= cost;
+            if (!user.holdings[stock.id]) user.holdings[stock.id] = { qty: 0, avg: 0 };
+            const h = user.holdings[stock.id];
+            h.avg = ((h.qty * h.avg) + cost) / (h.qty + qty);
+            h.qty += qty;
+            updateUI();
+            saveData();
+        };
+
+        document.getElementById('sellBtn').onclick = () => {
+            const qty = parseInt(document.getElementById('tradeQty').value);
+            const stock = stocks.find(s => s.id === selectedStockId);
+            const h = user.holdings[stock.id];
+            if (!h || h.qty < qty || isNaN(qty)) return alert("보유 수량이 부족합니다.");
+            user.cash += stock.price * qty;
+            h.qty -= qty;
+            if (h.qty === 0) delete user.holdings[stock.id];
+            updateUI();
+            saveData();
+        };
+
+        // 기타 유틸리티 (차트, 리스트 렌더링 등은 기존과 동일)
+        function renderStockList() {
+            const list = document.getElementById('stockList');
+            list.innerHTML = '';
+            stocks.forEach(stock => {
+                const el = document.createElement('div');
+                el.className = `p-3 rounded cursor-pointer hover:bg-[#252525] flex justify-between items-center transition bg-[#1e1e1e]`;
+                el.id = `stock-item-${stock.id}`;
+                el.onclick = () => {
+                    selectedStockId = stock.id;
+                    document.querySelectorAll('#stockList > div').forEach(d => d.classList.remove('border', 'border-gray-500', 'bg-[#333]'));
+                    el.classList.add('border', 'border-gray-500', 'bg-[#333]');
+                    updateUI();
+                    drawChart();
+                };
+                el.innerHTML = `<div><div class="font-bold text-sm">${stock.name}</div></div>
+                                <div class="text-right"><div class="font-mono font-bold text-sm price-val">0</div><div class="text-xs change-val">0%</div></div>`;
+                list.appendChild(el);
+            });
+        }
+
+        function renderPortfolio() {
+            const list = document.getElementById('portfolioList');
+            list.innerHTML = '';
+            Object.keys(user.holdings).forEach(id => {
+                const h = user.holdings[id];
+                const s = stocks.find(st => st.id === id);
+                const profitRate = (((s.price - h.avg) / h.avg) * 100).toFixed(2);
+                const el = document.createElement('div');
+                el.className = "p-3 bg-[#252525] rounded mb-1 border border-[#333]";
+                el.innerHTML = `<div class="flex justify-between text-sm"><span>${s.name}</span><span>${h.qty}주</span></div>
+                                <div class="flex justify-between items-end mt-1">
+                                    <span class="text-[10px] text-gray-500">평단 ${Math.floor(h.avg).toLocaleString()}</span>
+                                    <span class="${profitRate>=0?'text-up':'text-down'} font-bold text-sm">${profitRate}%</span>
+                                </div>`;
+                list.appendChild(el);
+            });
+        }
+
+        function resizeCanvas() {
+            const c = document.getElementById('chartCanvas');
+            c.width = c.parentElement.clientWidth;
+            c.height = c.parentElement.clientHeight;
+        }
+
+        function drawChart() {
+            const c = document.getElementById('chartCanvas');
+            const ctx = c.getContext('2d');
+            const stock = stocks.find(s => s.id === selectedStockId);
+            if (!stock) return;
+            const data = stock.history;
+            const min = Math.min(...data) * 0.99;
+            const max = Math.max(...data) * 1.01;
+            const range = max - min;
+            ctx.clearRect(0,0,c.width,c.height);
+            ctx.beginPath();
+            const step = c.width / (data.length - 1);
+            data.forEach((p, i) => {
+                const x = i * step;
+                const y = c.height - ((p - min) / range) * c.height;
+                if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+            });
+            ctx.strokeStyle = data[data.length-1] >= data[0] ? '#ef4444' : '#3b82f6';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function setQty(n) { document.getElementById('tradeQty').value = n; }
+        function setMaxQty() {
+            const s = stocks.find(st => st.id === selectedStockId);
+            document.getElementById('tradeQty').value = Math.floor(user.cash / s.price);
+        }
+        function resetData() { if(confirm("초기화할까요?")) { localStorage.removeItem('stockSimData_v2'); location.reload(); } }
+
+        init();
+    </script>
 </body>
 </html>
